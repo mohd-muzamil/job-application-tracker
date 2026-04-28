@@ -87,15 +87,20 @@ function detectStatus(snippets) {
 }
 
 function extractCompany(subject, sender) {
-  // Try "Thank you for applying to COMPANY" pattern
   const m = subject.match(/applying to (.+?)(?:\s*[-–!|]|$)/i)
-           || subject.match(/application to (.+?)(?:\s*[-–!|]|$)/i)
+           || subject.match(/application (?:to|for|with) (.+?)(?:\s*[-–!|]|$)/i)
            || subject.match(/interest in (.+?)(?:\s*[-–!|]|$)/i)
-           || subject.match(/at (.+?)(?:\s*[-–!|]|$)/i);
+           || subject.match(/(?:^|\s)(?:update|news|decision)\s+from\s+(.+?)(?:\s*[-–!|,]|$)/i)
+           || subject.match(/\bat (.+?)(?:\s*[-–!|]|$)/i);
   if (m) return m[1].trim().replace(/[!.]+$/, "");
-  // Fall back to sender domain
-  const domain = sender.replace(/.*@/, "").replace(/\..+/, "");
-  return domain.charAt(0).toUpperCase() + domain.slice(1);
+  // Fall back to sender domain — skip generic ESPs (greenhouse, lever, workday, etc.)
+  const ESP = /greenhouse|lever|workday|taleo|icims|jobvite|smartrecruiters|myworkday|successfactors/i;
+  const domain = sender.replace(/.*@/, "");
+  const parts  = domain.split(".");
+  // Pick the most meaningful part (skip "us", "mail", "jobs", "no-reply" prefixes)
+  const skip   = /^(us|uk|ca|mail|jobs|careers|no-?reply|info|hr|talent|recruiting)$/i;
+  const name   = parts.find(p => !skip.test(p) && !ESP.test(p)) || parts[0];
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 function extractPosition(subject, snippets = []) {
@@ -197,11 +202,33 @@ function mergeTwo(base, incoming) {
 }
 
 function mergeApplications(existing, incoming) {
-  // First collapse incoming threads that belong to the same application
+  // First collapse incoming threads that belong to the same application.
+  // Match by company+position; if one side has "Unknown" position, match by company alone.
   const incomingMerged = new Map();
+
+  function findByCompany(map, company) {
+    const prefix = company.toLowerCase().trim() + "|||";
+    for (const [k, v] of map) if (k.startsWith(prefix)) return k;
+    return null;
+  }
+
   for (const app of incoming) {
-    const key = appKey(app.company, app.position);
-    incomingMerged.set(key, incomingMerged.has(key) ? mergeTwo(incomingMerged.get(key), app) : app);
+    const exactKey  = appKey(app.company, app.position);
+    const isUnknown = app.position === "Unknown";
+
+    let existingMapKey = incomingMerged.has(exactKey) ? exactKey : null;
+    if (!existingMapKey) existingMapKey = findByCompany(incomingMerged, app.company);
+
+    if (!existingMapKey) {
+      incomingMerged.set(exactKey, app);
+    } else {
+      const prev    = incomingMerged.get(existingMapKey);
+      const merged  = mergeTwo(prev, app);
+      merged.position = prev.position !== "Unknown" ? prev.position : app.position;
+      const newKey  = appKey(merged.company, merged.position);
+      incomingMerged.delete(existingMapKey);
+      incomingMerged.set(newKey, merged);
+    }
   }
 
   // Merge with existing store (keyed by company+position)
@@ -209,18 +236,22 @@ function mergeApplications(existing, incoming) {
   let added = 0, updated = 0;
 
   for (const app of incomingMerged.values()) {
-    const key = appKey(app.company, app.position);
-    if (!byKey.has(key)) {
-      byKey.set(key, app);
+    const exactKey = appKey(app.company, app.position);
+    let existingKey = byKey.has(exactKey) ? exactKey : null;
+    if (!existingKey) existingKey = findByCompany(byKey, app.company);
+
+    if (!existingKey) {
+      byKey.set(exactKey, app);
       added++;
     } else {
-      const prev = byKey.get(key);
-      byKey.set(key, {
-        ...mergeTwo(prev, app),
-        location : prev.location !== "Canada" ? prev.location : app.location,
-        priority : prev.priority,
-        notes    : prev.notes || app.notes,
-      });
+      const prev   = byKey.get(existingKey);
+      const merged = mergeTwo(prev, app);
+      merged.position = prev.position !== "Unknown" ? prev.position : app.position;
+      merged.location = prev.location !== "Canada"  ? prev.location : app.location;
+      merged.priority = prev.priority;
+      merged.notes    = prev.notes || app.notes;
+      byKey.delete(existingKey);
+      byKey.set(appKey(merged.company, merged.position), merged);
       updated++;
     }
   }
