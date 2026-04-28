@@ -97,10 +97,31 @@ function extractCompany(subject, sender) {
   return domain.charAt(0).toUpperCase() + domain.slice(1);
 }
 
-function extractPosition(subject) {
-  const m = subject.match(/for (?:the )?(.+?) (?:position|role|opportunity)/i)
-           || subject.match(/- (.+?) -/);
-  return m ? m[1].trim() : "Unknown";
+function extractPosition(subject, snippets = []) {
+  for (const text of [subject, ...snippets]) {
+    // "application/applied for [Title]" — stop at comma, newline, "and"
+    let m = text.match(/(?:applied|application)\s+for\s+(?:the\s+)?([^,!\n]{3,80})(?=[,!\n]|$|\sand\b)/i);
+    if (m) {
+      const pos = m[1].trim().replace(/[!.,\s]+$/, "");
+      if (pos.length < 80 && !/^\s*(your|our|my|this)\b/i.test(pos)) return pos;
+    }
+    // "[Title Case Words] position/role/opportunity"
+    m = text.match(/\b([A-Z][a-z]+(?:\s+[A-Za-z]+){0,5})\s+(?:position|role|opportunity)\b/);
+    if (m) return m[1].trim();
+    // Subject line dash separator: "Company - Title"
+    m = text.match(/- (.+?) -/) || text.match(/\| (.+?) \|/);
+    if (m) return m[1].trim();
+  }
+  return "Unknown";
+}
+
+function decodeBody(payload) {
+  const tryPart = p => {
+    if (p.body?.data) return Buffer.from(p.body.data, "base64").toString("utf-8");
+    if (p.parts) return p.parts.map(tryPart).join(" ");
+    return "";
+  };
+  return tryPart(payload);
 }
 
 function parseThread(thread) {
@@ -109,21 +130,23 @@ function parseThread(thread) {
   const subject = first.payload?.headers?.find(h => h.name === "Subject")?.value || "";
   const sender  = first.payload?.headers?.find(h => h.name === "From")?.value || "";
   const dates   = msgs.map(m => new Date(parseInt(m.internalDate)).toISOString().split("T")[0]);
+  // Use full body for status detection; fall back to snippet
+  const texts   = msgs.map(m => decodeBody(m.payload) || m.snippet || "");
   const snippets = msgs.map(m => m.snippet || "");
 
-  const status   = detectStatus(snippets);
+  const status   = detectStatus(texts);
   const company  = extractCompany(subject, sender);
-  const position = extractPosition(subject);
+  const position = extractPosition(subject, snippets);
 
   // Map dates to lifecycle events
   const timeline = { applied: dates[0] };
   msgs.forEach((m, i) => {
-    const snip = (m.snippet || "").toLowerCase();
-    if (STATUS_SIGNALS.screening.some(k => snip.includes(k)))   timeline.screened    = dates[i];
-    if (STATUS_SIGNALS.assessment.some(k => snip.includes(k)))  timeline.assessment  = dates[i];
-    if (STATUS_SIGNALS.interview.some(k => snip.includes(k)))   timeline.interviewed = dates[i];
-    if (STATUS_SIGNALS.rejected.some(k => snip.includes(k)))    timeline.rejected    = dates[i];
-    if (STATUS_SIGNALS.offer.some(k => snip.includes(k)))       timeline.offer       = dates[i];
+    const body = texts[i].toLowerCase();
+    if (STATUS_SIGNALS.screening.some(k => body.includes(k)))   timeline.screened    = dates[i];
+    if (STATUS_SIGNALS.assessment.some(k => body.includes(k)))  timeline.assessment  = dates[i];
+    if (STATUS_SIGNALS.interview.some(k => body.includes(k)))   timeline.interviewed = dates[i];
+    if (STATUS_SIGNALS.rejected.some(k => body.includes(k)))    timeline.rejected    = dates[i];
+    if (STATUS_SIGNALS.offer.some(k => body.includes(k)))       timeline.offer       = dates[i];
   });
 
   return {
@@ -149,19 +172,50 @@ function saveStore(apps) {
   fs.writeFileSync(CONFIG.storeFile, JSON.stringify(apps, null, 2));
 }
 
+const STATUS_RANK = { offer:6, accepted:5, interview:4, assessment:3, screening:2, rejected:1, applied:0 };
+
+function appKey(company, position) {
+  return `${company.toLowerCase().trim()}|||${position.toLowerCase().trim()}`;
+}
+
+function mergeTwo(base, incoming) {
+  const timeline = {};
+  // For lifecycle events use the latest date (the event happened at a specific point in time)
+  for (const f of ["screened", "assessment", "interviewed", "rejected", "offer"]) {
+    const dates = [base[f], incoming[f]].filter(Boolean);
+    if (dates.length) timeline[f] = dates.sort().pop();
+  }
+  return {
+    ...base,
+    ...timeline,
+    applied     : base.applied < incoming.applied ? base.applied : incoming.applied,
+    lastUpdated : base.lastUpdated > incoming.lastUpdated ? base.lastUpdated : incoming.lastUpdated,
+    status      : (STATUS_RANK[incoming.status] || 0) > (STATUS_RANK[base.status] || 0)
+                    ? incoming.status : base.status,
+  };
+}
+
 function mergeApplications(existing, incoming) {
-  const byId = new Map(existing.map(a => [a.id, a]));
+  // First collapse incoming threads that belong to the same application
+  const incomingMerged = new Map();
+  for (const app of incoming) {
+    const key = appKey(app.company, app.position);
+    incomingMerged.set(key, incomingMerged.has(key) ? mergeTwo(incomingMerged.get(key), app) : app);
+  }
+
+  // Merge with existing store (keyed by company+position)
+  const byKey = new Map(existing.map(a => [appKey(a.company, a.position), a]));
   let added = 0, updated = 0;
 
-  for (const app of incoming) {
-    if (!byId.has(app.id)) {
-      byId.set(app.id, app);
+  for (const app of incomingMerged.values()) {
+    const key = appKey(app.company, app.position);
+    if (!byKey.has(key)) {
+      byKey.set(key, app);
       added++;
     } else {
-      // Merge: preserve user edits (location, priority, notes) but update timeline
-      const prev = byId.get(app.id);
-      byId.set(app.id, {
-        ...app,
+      const prev = byKey.get(key);
+      byKey.set(key, {
+        ...mergeTwo(prev, app),
         location : prev.location !== "Canada" ? prev.location : app.location,
         priority : prev.priority,
         notes    : prev.notes || app.notes,
@@ -171,7 +225,7 @@ function mergeApplications(existing, incoming) {
   }
 
   console.log(`   +${added} new  •  ~${updated} updated`);
-  return Array.from(byId.values()).sort((a, b) => b.applied.localeCompare(a.applied));
+  return Array.from(byKey.values()).sort((a, b) => b.applied.localeCompare(a.applied));
 }
 
 // ─── DOCX GENERATOR ───────────────────────────────────────────────────────────
@@ -312,10 +366,17 @@ async function main() {
   const gmail    = await getGmailClient();
   const threads  = await fetchNewThreads(gmail);
 
-  // Fetch full thread data for parsing
-  const fullThreads = await Promise.all(
-    threads.map(t => gmail.users.threads.get({ userId:"me", id:t.id }).then(r => r.data))
-  );
+  // Fetch full thread data in batches to avoid rate limits
+  const fullThreads = [];
+  const BATCH = 10;
+  for (let i = 0; i < threads.length; i += BATCH) {
+    const batch = threads.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map(t => gmail.users.threads.get({ userId:"me", id:t.id }).then(r => r.data))
+    );
+    fullThreads.push(...results);
+    if (i + BATCH < threads.length) await new Promise(r => setTimeout(r, 200));
+  }
 
   const incoming  = fullThreads.map(parseThread);
   const existing  = loadStore();

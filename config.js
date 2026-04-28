@@ -26,10 +26,12 @@ export const APPLY_KEYWORDS = [
 
 // Keywords that signal a status change in a thread
 export const STATUS_SIGNALS = {
-  rejected   : ["not moving forward", "not selected", "position has been filled",
-                 "decided to pursue other", "regret to inform", "unfortunately",
+  rejected   : ["not moving forward", "have not selected", "we did not select",
+                 "position has been filled", "decided to pursue other",
+                 "regret to inform", "we will not be moving forward",
                  "no longer recruiting", "position is no longer available",
-                 "will not be moving forward", "did not select"],
+                 "will not be moving forward", "chosen not to move forward",
+                 "not been selected", "unable to move forward"],
   interview  : ["invite you to interview", "interview invitation", "schedule an interview",
                  "would like to interview", "pleased to invite you", "interview on"],
   assessment : ["technical assessment", "coding challenge", "coderpad", "hackerrank",
