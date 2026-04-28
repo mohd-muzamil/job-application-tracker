@@ -15,7 +15,8 @@ import { fileURLToPath } from "url";
 import { google } from "googleapis";
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  AlignmentType, BorderStyle, WidthType, ShadingType, HeadingLevel, PageOrientation
+  AlignmentType, BorderStyle, WidthType, ShadingType, HeadingLevel, PageOrientation,
+  ExternalHyperlink
 } from "docx";
 import { CONFIG as _CONFIG, APPLY_KEYWORDS, STATUS_SIGNALS } from "./config.js";
 
@@ -259,9 +260,22 @@ function dCell(text, w, bg, small) {
       children: [new TextRun({ text: text || "–", size: small ? 15 : 16 })] })]
   });
 }
+function linkCell(url, w, bg) {
+  return new TableCell({
+    borders, width: { size: w, type: WidthType.DXA },
+    shading: { fill: bg || "FFFFFF", type: ShadingType.CLEAR },
+    margins: { top: 55, bottom: 55, left: 90, right: 90 },
+    children: [new Paragraph({
+      children: url ? [new ExternalHyperlink({
+        link: url,
+        children: [new TextRun({ text: "Open", size: 15, color: "1155CC", underline: {} })],
+      })] : [new TextRun({ text: "–", size: 15 })],
+    })]
+  });
+}
 
 // Landscape content width: 15840 - 2*1080 = 13680
-const CW = [1500, 2000, 1100, 900, 900, 1000, 1000, 900, 1000, 800, 2580];
+const CW = [1500, 2000, 1100, 900, 900, 1000, 1000, 900, 1000, 800, 700, 1880];
 
 async function generateDocx(apps) {
   const total      = apps.length;
@@ -327,10 +341,11 @@ async function generateDocx(apps) {
               hCell("Screened",CW[4]),  hCell("Interviewed",CW[5]),
               hCell("Assessment",CW[6]),hCell("Rejected",CW[7]),
               hCell("Status",CW[8]),    hCell("Priority",CW[9]),
-              hCell("Notes",CW[10]),
+              hCell("Email",CW[10]),    hCell("Notes",CW[11]),
             ]}),
             ...apps.map(a => {
-              const bg = statusColor(a.status);
+              const bg  = statusColor(a.status);
+              const url = a.id ? `https://mail.google.com/mail/u/0/#all/${a.id}` : null;
               return new TableRow({ children:[
                 dCell(a.company,      CW[0], bg),
                 dCell(a.position,     CW[1], bg, true),
@@ -342,7 +357,8 @@ async function generateDocx(apps) {
                 dCell(a.rejected,     CW[7], bg),
                 dCell(a.status,       CW[8], bg),
                 dCell(a.priority,     CW[9], bg),
-                dCell(a.notes,        CW[10],bg, true),
+                linkCell(url,         CW[10],bg),
+                dCell(a.notes,        CW[11],bg, true),
               ]});
             }),
             ...Array(5).fill(null).map(() =>
