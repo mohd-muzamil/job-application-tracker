@@ -16,8 +16,9 @@ import { google } from "googleapis";
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, BorderStyle, WidthType, ShadingType, HeadingLevel, PageOrientation,
-  ExternalHyperlink
+  ExternalHyperlink, ImageRun
 } from "docx";
+import { ChartJSNodeCanvas } from "chartjs-node-canvas";
 import { CONFIG as _CONFIG, APPLY_KEYWORDS, STATUS_SIGNALS } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -258,6 +259,57 @@ function mergeApplications(existing, incoming) {
 
   console.log(`   +${added} new  •  ~${updated} updated`);
   return Array.from(byKey.values()).sort((a, b) => b.applied.localeCompare(a.applied));
+}
+
+// ─── CHART HELPERS ────────────────────────────────────────────────────────────
+const chartCanvas = new ChartJSNodeCanvas({ width: 900, height: 380, backgroundColour: "white" });
+
+async function renderBarChart(labels, data, title, color) {
+  return chartCanvas.renderToBuffer({
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{ label: title, data, backgroundColor: color, borderColor: color, borderWidth: 1 }],
+    },
+    options: {
+      responsive: false,
+      plugins: {
+        title:  { display: true, text: title, font: { size: 15, weight: "bold" }, color: "#1F4E78" },
+        legend: { display: false },
+      },
+      scales: {
+        x: { ticks: { font: { size: 10 } } },
+        y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } } },
+      },
+    },
+  });
+}
+
+function weeklyAggregates(apps) {
+  const counts = {};
+  for (const app of apps) {
+    if (!app.applied) continue;
+    const d = new Date(app.applied + "T00:00:00Z");
+    const day = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const week = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+    const key = `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  return { labels: sorted.map(([k]) => k), data: sorted.map(([, v]) => v) };
+}
+
+function monthlyAggregates(apps) {
+  const counts = {};
+  for (const app of apps) {
+    if (!app.applied) continue;
+    const key = app.applied.slice(0, 7);
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  return { labels: sorted.map(([k]) => k), data: sorted.map(([, v]) => v) };
 }
 
 // ─── DOCX GENERATOR ───────────────────────────────────────────────────────────
