@@ -1,0 +1,9 @@
+node_modules/
+
+# OAuth credentials — never commit these
+credentials.json
+token.json
+
+# Personal data — keep off public repo
+applications.json
+Job_Application_Tracker.docx

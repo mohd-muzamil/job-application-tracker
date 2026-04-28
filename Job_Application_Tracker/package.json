@@ -1,0 +1,15 @@
+{
+  "name": "job-tracker-automation",
+  "version": "1.0.0",
+  "description": "Daily Gmail → DOCX job application tracker sync",
+  "type": "module",
+  "main": "sync.js",
+  "scripts": {
+    "sync": "node sync.js",
+    "setup": "node sync.js --setup"
+  },
+  "dependencies": {
+    "docx": "^9.5.0",
+    "googleapis": "^140.0.0"
+  }
+}
