@@ -48,31 +48,39 @@ A `token.json` file is saved — you won't need to do this again.
 ### 4. Run manually at any time
 
 ```bash
-node sync.js
+./run.sh
 ```
 
 This will:
-- Scan your Gmail for new job application emails (last 24 hours)
+- Scan your Gmail for new job application emails
 - Merge new entries into `applications.json` (your persistent database)
 - Regenerate `Job_Application_Tracker.docx`
+- Auto-commit and push any code changes (`sync.js`, `config.js`, etc.) to GitHub
+
+Your personal data (`applications.json`, `token.json`, `credentials.json`, DOCX) stays local and is never pushed.
 
 ---
 
 ## Schedule to run daily (automatic)
 
-### macOS / Linux — cron
+### macOS — cron (already configured)
 
-Open crontab:
+The cron job runs `run.sh` every day at **8:00 AM** and logs output to `sync.log`:
+
+```
+0 8 * * * PATH=/path/to/node/bin:/usr/bin:/bin /path/to/run.sh >> /path/to/sync.log 2>&1
+```
+
+To view or edit the schedule:
 ```bash
-crontab -e
+crontab -l        # view current cron jobs
+crontab -e        # edit cron jobs
 ```
 
-Add this line to run every day at 8:00 AM:
+To check the log:
+```bash
+cat sync.log
 ```
-0 8 * * * cd /path/to/job_tracker_automation && /usr/local/bin/node sync.js >> sync.log 2>&1
-```
-
-Find your Node.js path with: `which node`
 
 ### Windows — Task Scheduler
 
@@ -80,9 +88,9 @@ Find your Node.js path with: `which node`
 2. Name: "Job Tracker Sync"
 3. Trigger: **Daily** at 8:00 AM
 4. Action: **Start a program**
-   - Program: `node.exe` (full path, e.g. `C:\Program Files\nodejs\node.exe`)
-   - Arguments: `sync.js`
-   - Start in: `C:\path\to\job_tracker_automation`
+   - Program: `bash.exe` (Git Bash)
+   - Arguments: `run.sh`
+   - Start in: `C:\path\to\job_application_tracker`
 5. Finish
 
 ---
@@ -123,29 +131,39 @@ Regenerate Job_Application_Tracker.docx
 
 | File | Purpose |
 |------|---------|
-| `sync.js` | Main automation script |
+| `sync.js` | Main automation script (no need to edit) |
+| `config.js` | All user-facing settings — edit this |
+| `run.sh` | One-command runner: sync + auto git push |
 | `package.json` | Node.js dependencies |
 | `credentials.json` | Google OAuth secrets (**keep private, never share**) |
 | `token.json` | Your Gmail access token (**keep private**) |
 | `applications.json` | Persistent database of all applications |
 | `Job_Application_Tracker.docx` | Generated output — share/open this |
-| `sync.log` | Log file (created when run via cron) |
+| `sync.log` | Cron job log output |
 
 ---
 
 ## Customizing
 
-**Change how far back to scan** (default: 1 day):
+All user-facing settings live in **`config.js`** — never touch `sync.js` for config changes.
+
+**Change the start date for scanning:**
 ```js
-// In sync.js, line ~20
-searchAfterDays: 7,   // scan last 7 days
+// In config.js
+searchAfterDate: "2020-01-01",
 ```
 
 **Add more detection keywords:**
 ```js
-// In sync.js — APPLY_KEYWORDS array
+// In config.js — APPLY_KEYWORDS array
 '"your application is under review"',
 '"we received your resume"',
+```
+
+**Add or edit status signals (rejected, interview, etc.):**
+```js
+// In config.js — STATUS_SIGNALS object
+rejected: ["not moving forward", "regret to inform", ...],
 ```
 
 **Manually edit an application:**
